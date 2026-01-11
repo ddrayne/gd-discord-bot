@@ -9,16 +9,17 @@ const openai = new OpenAI({ apiKey: config.openai.apiKey });
 // Schema for structured output
 const LevelIdResponseSchema = z.object({
   levelId: z.string().nullable().describe('The Geometry Dash level ID if found, or null if not found'),
+  levelNames: z.array(z.string()).describe('Array of Geometry Dash level names mentioned (can be multiple for mashups/collaborations), empty array if none found'),
   confidence: z.enum(['high', 'medium', 'low']).describe('Confidence level of the extraction'),
-  reasoning: z.string().describe('Brief explanation of how the ID was determined'),
+  reasoning: z.string().describe('Brief explanation of how the ID or names were determined'),
 });
 
 /**
- * Use OpenAI to extract a Geometry Dash level ID from video metadata
+ * Use OpenAI to extract a Geometry Dash level ID or names from video metadata
  * @param {string} title - Video title
  * @param {string} description - Video description (will be truncated if too long)
  * @param {string} channelTitle - Channel name
- * @returns {Promise<{levelId: string|null, confidence: 'high'|'medium'|'low', reasoning: string}>}
+ * @returns {Promise<{levelId: string|null, levelNames: string[], confidence: 'high'|'medium'|'low', reasoning: string}>}
  */
 async function extractLevelIdWithAI(title, description, channelTitle) {
   return openaiLimiter.schedule(async () => {
@@ -28,39 +29,58 @@ async function extractLevelIdWithAI(title, description, channelTitle) {
         ? description.slice(0, 2000) + '...'
         : description;
 
-      const prompt = `Analyze this YouTube video metadata to extract a Geometry Dash level ID.
+      const prompt = `Analyze this YouTube video metadata to extract Geometry Dash level ID(s) and/or level name(s).
 
 Title: ${title}
 Channel: ${channelTitle}
 Description: ${truncatedDesc}
 
-Geometry Dash level IDs are typically 6-9 digit numbers. Look for:
-- Explicit mentions like "ID: 12345678" or "Level ID: 12345678"
-- Numbers in parentheses that could be IDs
-- Context clues that suggest a number is a level ID
-- The level name mentioned alongside an ID
+Look for:
+1. Level ID (6-9 digit numbers):
+   - Explicit mentions like "ID: 12345678" or "Level ID: 12345678"
+   - Numbers in parentheses that could be IDs
+   - Context clues that suggest a number is a level ID
 
-If you cannot find a level ID with reasonable confidence, return null for levelId.`;
+2. Level Names:
+   - The name(s) of Geometry Dash level(s) mentioned (e.g., "Bloodbath", "Sonic Wave", "The Lost Existence", "Slaughterhouse")
+   - Often in the title or description, may be in quotes or capitalized
+   - IMPORTANT: If this is a MASHUP or COLLABORATION (indicated by "X", "&", "vs", "mashup", "collab", etc.), extract ALL individual level names
+   - Examples:
+     * "Sunshine X Slaughterhouse" → ["Sunshine", "Slaughterhouse"]
+     * "Bloodbath & Cataclysm" → ["Bloodbath", "Cataclysm"]
+     * "Tartarus vs Zodiac mashup" → ["Tartarus", "Zodiac"]
+   - Ignore common prefixes/modifiers like "Beating", "100%", "All Coins", etc.
+   - Return level names in order of prominence/likelihood
 
-      const response = await openai.responses.parse({
+Return the level ID if found, and an array of level names (can be multiple for mashups). Return empty array if no names found with confidence.`;
+
+      const response = await openai.chat.completions.create({
         model: config.openai.model,
-        input: [
+        messages: [
           {
             role: 'system',
-            content: 'You are an expert at extracting Geometry Dash level IDs from YouTube video metadata. Be precise and only return IDs you are confident about.',
+            content: 'You are an expert at extracting Geometry Dash level IDs and names from YouTube video metadata. Be precise and only return information you are confident about.',
           },
           { role: 'user', content: prompt },
         ],
-        text: {
-          format: {
-            type: 'json_schema',
+        response_format: {
+          type: 'json_schema',
+          json_schema: {
             name: 'level_id_extraction',
+            strict: true,
             schema: {
               type: 'object',
               properties: {
                 levelId: {
                   type: ['string', 'null'],
                   description: 'The Geometry Dash level ID if found, or null if not found',
+                },
+                levelNames: {
+                  type: 'array',
+                  items: {
+                    type: 'string',
+                  },
+                  description: 'Array of Geometry Dash level names mentioned (can be multiple for mashups/collaborations), empty array if none found',
                 },
                 confidence: {
                   type: 'string',
@@ -69,18 +89,18 @@ If you cannot find a level ID with reasonable confidence, return null for levelI
                 },
                 reasoning: {
                   type: 'string',
-                  description: 'Brief explanation of how the ID was determined',
+                  description: 'Brief explanation of how the ID or names were determined',
                 },
               },
-              required: ['levelId', 'confidence', 'reasoning'],
+              required: ['levelId', 'levelNames', 'confidence', 'reasoning'],
               additionalProperties: false,
             },
-            strict: true,
           },
         },
       });
 
-      const parsed = LevelIdResponseSchema.parse(JSON.parse(response.output_text));
+      const content = response.choices[0].message.content;
+      const parsed = LevelIdResponseSchema.parse(JSON.parse(content));
       return parsed;
     } catch (error) {
       logger.error('OpenAI API error:', error);

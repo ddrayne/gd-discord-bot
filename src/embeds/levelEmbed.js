@@ -32,7 +32,7 @@ function formatNumber(num) {
  * Create a rich embed for a Geometry Dash level
  * @param {Object} levelInfo - Level data from GDBrowser
  * @param {Object} metadata - YouTube video metadata
- * @param {'regex'|'ai'} stage - Which extraction stage found the level
+ * @param {'regex'|'ai'|'name_search'} stage - Which extraction stage found the level
  * @returns {EmbedBuilder}
  */
 function createLevelEmbed(levelInfo, metadata, stage) {
@@ -53,7 +53,7 @@ function createLevelEmbed(levelInfo, metadata, stage) {
       { name: 'Length', value: levelInfo.length || 'Unknown', inline: true },
     )
     .setFooter({
-      text: `ID: ${levelInfo.id} | Found via ${stage === 'ai' ? 'AI analysis' : 'pattern matching'}`,
+      text: `ID: ${levelInfo.id} | Found via ${stage === 'ai' ? 'AI analysis' : stage === 'name_search' ? 'level name search' : 'pattern matching'}`,
     })
     .setTimestamp();
 
